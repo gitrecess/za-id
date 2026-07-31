@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { isValidZaId, parseZaId } from '../src/index.ts';
+import { luhnValid } from '../src/luhn.ts';
 
 const NOW = new Date(2026, 6, 31); // 2026-07-31
 
@@ -96,10 +97,17 @@ test('a partial number is a hard failure, not a partial success', () => {
 
 test('reports the date before the checksum', () => {
   // Both are wrong in these; the date is the one a user can act on.
-  const impossibleDay = parseZaId('8004315009088', { now: NOW });
+  //
+  // The fixtures must fail the checksum too, or this proves nothing — with a
+  // valid check digit the date is the only thing left to fail, so the test
+  // passes whichever order the two run in. An earlier pair did exactly that.
+  // The luhnValid assertions below are what stop that happening again.
+  assert.equal(luhnValid('8004315009089'), false, 'fixture must fail Luhn too');
+  const impossibleDay = parseZaId('8004315009089', { now: NOW });
   assert.equal(!impossibleDay.valid && impossibleDay.reason, 'invalid-date');
 
-  const impossibleMonth = parseZaId('8013015009082', { now: NOW });
+  assert.equal(luhnValid('8013015009083'), false, 'fixture must fail Luhn too');
+  const impossibleMonth = parseZaId('8013015009083', { now: NOW });
   assert.equal(!impossibleMonth.valid && impossibleMonth.reason, 'invalid-month');
 });
 
