@@ -1,0 +1,56 @@
+{
+  "name": "@iamlukia/za-id",
+  "version": "0.1.0",
+  "description": "Validate and decode South African ID numbers. Zero dependencies, fully typed, runs anywhere — no network call.",
+  "keywords": [
+    "south-africa",
+    "south-african",
+    "za",
+    "id-number",
+    "identity-number",
+    "validation",
+    "luhn",
+    "typescript"
+  ],
+  "license": "MIT",
+  "author": "Lukia (https://iamlukia.com)",
+  "homepage": "https://iamlukia.com/tools/sa-id-validator/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gitrecess/za-id.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gitrecess/za-id/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.0"
+  }
+}

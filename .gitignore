@@ -1,0 +1,17 @@
+# build output
+dist/
+
+# dependencies
+node_modules/
+
+# packed tarballs from `npm pack`
+*.tgz
+
+# logs
+npm-debug.log*
+
+# macOS-specific files
+.DS_Store
+
+# jetbrains setting folder
+.idea/

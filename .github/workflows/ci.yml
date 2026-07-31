@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.17.1 is the floor pinned in .nvmrc; 24 catches anything that
+        # depends on the current type-stripping behaviour staying experimental.
+        node: ['22.17.1', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      # The package is worth nothing if the tarball is wrong. `src/` is shipped
+      # deliberately, so the declaration and source maps in `dist/` resolve;
+      # anything beyond it, and `test/` in particular, is a mistake.
+      - name: Check tarball contents
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e "
+            const [{ files }] = require('./pack.json');
+            const paths = files.map(f => f.path);
+            const allowed = ['package.json', 'README.md', 'LICENSE'];
+            const stray = paths.filter(p =>
+              !p.startsWith('dist/') && !p.startsWith('src/') && !allowed.includes(p));
+            if (stray.length) { console.error('Unexpected files in tarball:', stray); process.exit(1); }
+            for (const required of ['dist/index.js', 'dist/index.d.ts', 'src/index.ts']) {
+              if (!paths.includes(required)) { console.error('Tarball is missing', required); process.exit(1); }
+            }
+            console.log('Tarball OK:', paths.length, 'files');
+          "
