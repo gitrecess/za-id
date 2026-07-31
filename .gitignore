@@ -15,3 +15,8 @@ npm-debug.log*
 
 # jetbrains setting folder
 .idea/
+
+# agent working notes — local only, never in a public repo
+CLAUDE.md
+AGENTS.md
+.claude/
