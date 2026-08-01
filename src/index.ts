@@ -71,6 +71,11 @@ export type ZaIdResult = ZaIdFailure | ZaIdSuccess;
  * else console.log(result.reason, result.message);
  * ```
  *
+ * Every `id` comes back as a result rather than an exception, including one
+ * that is not a string at all — which an untyped JavaScript caller can still
+ * hand over. `options` is not guarded that way: passing something that is not
+ * a `ZaIdOptions` throws.
+ *
  * A `valid: true` result means the number is *well-formed* — the format, date
  * and checksum all agree. It does not mean the number was ever issued, or that
  * it belongs to the person presenting it. A checksum is arithmetic, and
@@ -82,6 +87,28 @@ export type ZaIdResult = ZaIdFailure | ZaIdSuccess;
  * position anyone needs today.
  */
 export function parseZaId(id: string, options: ZaIdOptions = {}): ZaIdResult {
+  // First statement in the function, deliberately: nothing may touch `id`
+  // before it has been established to be a string.
+  //
+  // The signature says `string`, but an untyped JavaScript caller can pass
+  // anything — a number field straight out of `JSON.parse` is the realistic
+  // case, since that is how ID numbers arrive. Returning a failure rather than
+  // letting `id.replace` throw keeps the one promise this package makes about
+  // its own control flow. `not-digits` is reused deliberately: a new reason
+  // would break every caller's exhaustive switch for a case they cannot reach
+  // in TypeScript anyway.
+  //
+  // Note this covers `id` only. `options` is still dereferenced unguarded, so
+  // `parseZaId(id, null)` and `{ now: 'today' }` do throw — see the README,
+  // which says so rather than claiming more than the code does.
+  if (typeof id !== 'string') {
+    return {
+      valid: false,
+      reason: 'not-digits',
+      message: 'An ID number must be given as a string of digits.',
+    };
+  }
+
   const now = options.now ?? new Date();
 
   // Whitespace is stripped rather than rejected — grouped forms like

@@ -43,11 +43,22 @@ versions, the reasons will not.
 
 | `reason` | Meaning |
 | :--- | :--- |
-| `not-digits` | Something other than digits and whitespace. |
+| `not-digits` | Something other than digits and whitespace — or not a string. |
 | `wrong-length` | Not exactly thirteen digits. |
 | `invalid-month` | Digits 3–4 are not a month. |
 | `invalid-date` | A day that does not exist in that month. |
 | `checksum` | The Luhn check fails. |
+
+Every `id` comes back as a result rather than an exception. That includes one
+that is not a string at all — a number straight out of `JSON.parse`, `null`,
+`undefined` — which reports `not-digits` instead of raising a `TypeError`.
+TypeScript callers will not get that far, since the signature asks for a
+`string`; the guard is there for the JavaScript ones.
+
+The second argument is not covered by that. `parseZaId(id, null)` and
+`parseZaId(id, { now: 'today' })` both throw, and an `Invalid Date` in `now`
+throws nothing but quietly assumes the 1900s. If you are building `options`
+from untrusted input, validate it yourself.
 
 ### Pinning the reference date
 

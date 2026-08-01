@@ -69,6 +69,23 @@ test('rejects anything that is not a digit', () => {
   }
 });
 
+test('a non-string argument fails rather than throwing', () => {
+  // The realistic caller is untyped JavaScript handing over a number field
+  // straight out of JSON.parse. A validation library is the one place a caller
+  // should never need a try.
+  for (const input of [8001015009087, null, undefined, {}, ['8001015009087']]) {
+    // @ts-expect-error — the signature asks for a string; this is the
+    // JavaScript caller's path, and it must not throw.
+    const result = parseZaId(input, { now: NOW });
+
+    assert.equal(result.valid, false, `${String(input)} should fail`);
+    assert.equal(!result.valid && result.reason, 'not-digits');
+  }
+
+  // @ts-expect-error — same, through the convenience wrapper.
+  assert.equal(isValidZaId(8001015009087, { now: NOW }), false);
+});
+
 test('rejects non-ASCII digits', () => {
   // Arabic-Indic digits look like digits and are not. \d must not match them.
   const result = parseZaId('٨٠٠١٠١٥٠٠٩٠٨٧', { now: NOW });
@@ -164,8 +181,17 @@ test('failure results carry a message but callers branch on reason', () => {
 
   assert.equal(typeof result.message, 'string');
   assert.ok(result.message.length > 0);
-  // The decoded fields must not be reachable on a failure — this is a
-  // compile-time guarantee, asserted at runtime as a backstop.
+  // The decoded fields must not be reachable on a failure. These two lines are
+  // the guarantee itself rather than a comment about one: `npm run typecheck`
+  // fails if the union ever stops discriminating, and fails just as loudly
+  // — unused '@ts-expect-error' directive — if it starts allowing them.
+  // @ts-expect-error — `dateOfBirth` does not exist on a failure result.
+  result.dateOfBirth;
+  // @ts-expect-error — nor does `sex`.
+  result.sex;
+
+  // Asserted at runtime too, as a backstop: types cannot see a shape change
+  // that leaves the declarations alone.
   assert.equal('dateOfBirth' in result, false);
   assert.equal('sex' in result, false);
 });

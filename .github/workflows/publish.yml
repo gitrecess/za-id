@@ -16,6 +16,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Full history and every branch ref, so the ancestry check below has
+          # an `origin/main` to test against. The default shallow fetch of the
+          # tag alone would make that step fail on a missing ref, which reads
+          # as a rejected tag rather than as a broken workflow.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -23,9 +29,10 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
 
-      - run: npm ci
-      - run: npm run build
-      - run: npm test
+      # The two tag checks run first, before install and build. They need only
+      # git and a JSON read, they are the checks most likely to fail, and a
+      # mis-tagged release should be rejected in seconds rather than after a
+      # full build and test run.
 
       # A tag that disagrees with package.json publishes the wrong version
       # under the right name, which is not something you can take back.
@@ -41,6 +48,35 @@ jobs:
             exit 1
           fi
           echo "Tag and package version agree: $PKG"
+
+      # A tag can be pushed at any commit in the repo, including one that was
+      # never merged and that nothing has reviewed. Same reasoning as the
+      # version check: npm is the wrong place to discover it, since a bad
+      # version cannot be replaced, only deprecated, or unpublished inside a
+      # 72-hour window. If this fails, you tagged before pushing main.
+      - name: Tag must be an ancestor of main
+        run: |
+          # `fetch-depth: 0` above should already have brought origin/main
+          # down. Fetching it explicitly costs nothing and means this step
+          # fails on the thing it is testing rather than on a missing ref.
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "Tag commit $GITHUB_SHA is not reachable from origin/main." >&2
+            echo "Push main before pushing the tag." >&2
+            exit 1
+          fi
+          echo "Tag commit is on main."
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run typecheck
+
+      # The same gate ci.yml runs. It lived there alone until now, which meant
+      # the one path that actually publishes was the one path that never
+      # checked what it was publishing.
+      - name: Check tarball contents
+        run: node scripts/check-tarball.mjs
 
       # Provenance and public access come from publishConfig in package.json.
       - name: Publish to npm

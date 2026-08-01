@@ -1,0 +1,18 @@
+// Type-checks `test/` as well as `src/`. `npm test` runs under Node's type
+// stripping, which *erases* types without checking them — so without this the
+// tests assert narrowing behaviour that no compiler ever verifies, and the
+// "@ts-expect-error" directives in them would be inert comments.
+//
+// Nothing is emitted from here. `npm run build` still uses tsconfig.json.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+
+    // The base pins rootDir to `src` for the build. Inheriting that here makes
+    // every test file a TS6059 ("not under rootDir"), so widen it — there is
+    // no output for a rootDir to be relative to.
+    "rootDir": "."
+  },
+  "include": ["src", "test"]
+}
