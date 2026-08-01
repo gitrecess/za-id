@@ -1,6 +1,6 @@
 {
   "name": "@iamlukia/za-id",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Validate and decode South African ID numbers. Zero dependencies, fully typed, runs anywhere — no network call.",
   "keywords": [
     "south-africa",
@@ -48,7 +48,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "clean": "rm -rf dist",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/*.test.ts",
-    "prepublishOnly": "npm run clean && npm run build && npm test"
+    "prepublishOnly": "npm run clean && npm run build && npm test && npm run typecheck && node scripts/check-tarball.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

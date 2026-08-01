@@ -143,20 +143,44 @@ test('thirteen zeros fail on the month, not the checksum', () => {
   assert.equal(!result.valid && result.reason, 'invalid-month');
 });
 
-test('isValidZaId agrees with parseZaId', () => {
-  for (const id of [
-    '8001015009087',
-    '8001015009088',
-    '800101500908',
-    'nonsense',
-    '8506124321025',
-  ]) {
-    assert.equal(
-      isValidZaId(id, { now: NOW }),
-      parseZaId(id, { now: NOW }).valid,
-      `disagreement on ${id}`,
-    );
-  }
+test('isValidZaId forwards its options rather than only its id', () => {
+  // The wrapper is `return parseZaId(id, options).valid`, so asserting it
+  // returns the same boolean as the thing it calls cannot fail — no fixture
+  // can make a one-line delegation disagree with itself. That is what this
+  // test used to do. Same failure mode as 54619d2, the check-order test whose
+  // fixtures both had valid Luhn digits: green throughout, constraining
+  // nothing.
+  //
+  // The property worth pinning is that `options` survives the hop. It needs a
+  // fixture whose *verdict* moves with `now`, which the previous five did not
+  // have: 29 Feb 2000 is a leap day and 29 Feb 1900 is not, so pinning `now`
+  // before 2000 pushes the century inference back into a year where the date
+  // does not exist. A wrapper that dropped `options` would answer true twice.
+  assert.equal(isValidZaId('0002294999004', { now: NOW }), true);
+  assert.equal(isValidZaId('0002294999004', { now: new Date(1999, 0, 1) }), false);
+
+  // And the reason, so the delegation is pinned past the boolean too.
+  const pushedBack = parseZaId('0002294999004', { now: new Date(1999, 0, 1) });
+  assert.equal(!pushedBack.valid && pushedBack.reason, 'invalid-date');
+});
+
+test('an Invalid Date in now throws rather than assuming a century', () => {
+  // The value being asserted here is loudness. Before 0.3.0 this call
+  // returned a perfectly ordinary success reporting 1980 — every comparison
+  // against NaN is false, so the inference took its else branch and the
+  // caller had no way to tell. A wrong answer with no signal is worse than
+  // any error.
+  assert.throws(
+    () => parseZaId('8001015009087', { now: new Date('garbage') }),
+    RangeError,
+  );
+  assert.throws(
+    () => isValidZaId('8001015009087', { now: new Date('garbage') }),
+    RangeError,
+  );
+
+  // A real date still works, including one that decides nothing here.
+  assert.equal(isValidZaId('8001015009087', { now: NOW }), true);
 });
 
 test('now defaults to the current date', () => {

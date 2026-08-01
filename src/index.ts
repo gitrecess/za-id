@@ -74,7 +74,7 @@ export type ZaIdResult = ZaIdFailure | ZaIdSuccess;
  * Every `id` comes back as a result rather than an exception, including one
  * that is not a string at all — which an untyped JavaScript caller can still
  * hand over. `options` is not guarded that way: passing something that is not
- * a `ZaIdOptions` throws.
+ * a `ZaIdOptions` throws, and so does an `Invalid Date` in `now`.
  *
  * A `valid: true` result means the number is *well-formed* — the format, date
  * and checksum all agree. It does not mean the number was ever issued, or that
@@ -100,7 +100,9 @@ export function parseZaId(id: string, options: ZaIdOptions = {}): ZaIdResult {
   //
   // Note this covers `id` only. `options` is still dereferenced unguarded, so
   // `parseZaId(id, null)` and `{ now: 'today' }` do throw — see the README,
-  // which says so rather than claiming more than the code does.
+  // which says so rather than claiming more than the code does. All three
+  // `options` failures are now loud; the `Invalid Date` one used to be silent
+  // and is caught below.
   if (typeof id !== 'string') {
     return {
       valid: false,
@@ -110,6 +112,22 @@ export function parseZaId(id: string, options: ZaIdOptions = {}): ZaIdResult {
   }
 
   const now = options.now ?? new Date();
+
+  // An `Invalid Date` is the one `options` mistake that is otherwise silent.
+  // Every comparison against `NaN` is false, so the century inference takes
+  // its else branch and the caller gets a confident 1900s answer with no
+  // signal at all. Thrown rather than returned deliberately: a new
+  // `ZaIdFailureReason` would break every caller's exhaustive switch for a
+  // case TypeScript cannot reach, and the contract stays one sentence — the
+  // result union is for `id`, `options` misuse throws. `RangeError` because
+  // the type is right and the value is not, which is the call
+  // `Date.prototype.toISOString()` makes on the same input.
+  if (Number.isNaN(now.getTime())) {
+    throw new RangeError(
+      'options.now is an Invalid Date. Century inference against it would ' +
+        'silently report the 1900s.',
+    );
+  }
 
   // Whitespace is stripped rather than rejected — grouped forms like
   // "800101 5009 08 7" are how people actually paste these.

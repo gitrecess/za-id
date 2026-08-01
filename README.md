@@ -55,10 +55,15 @@ that is not a string at all — a number straight out of `JSON.parse`, `null`,
 TypeScript callers will not get that far, since the signature asks for a
 `string`; the guard is there for the JavaScript ones.
 
-The second argument is not covered by that. `parseZaId(id, null)` and
-`parseZaId(id, { now: 'today' })` both throw, and an `Invalid Date` in `now`
-throws nothing but quietly assumes the 1900s. If you are building `options`
-from untrusted input, validate it yourself.
+The second argument is not covered by that: `options` mistakes throw rather
+than coming back as a result. `parseZaId(id, null)` and `parseZaId(id, { now:
+'today' })` raise a `TypeError`, and an `Invalid Date` in `now` raises a
+`RangeError` — every comparison against `NaN` is false, so without that check
+the century inference quietly assumes the 1900s and reports it as fact. If you
+are building `options` from untrusted input, validate it yourself.
+
+Since `0.3.0`. Before that, an `Invalid Date` was the one case that failed
+silently.
 
 ### Pinning the reference date
 
