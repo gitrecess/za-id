@@ -29,8 +29,8 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
 
-      # The two tag checks run first, before install and build. They need only
-      # git and a JSON read, they are the checks most likely to fail, and a
+      # The three checks below run first, before install and build. They need
+      # only git and a JSON read, they are the checks most likely to fail, and a
       # mis-tagged release should be rejected in seconds rather than after a
       # full build and test run.
 
@@ -66,6 +66,13 @@ jobs:
             exit 1
           fi
           echo "Tag commit is on main."
+
+      # The lockfile version is not something npm will complain about — `npm ci`
+      # tolerates a mismatch and the tarball takes its version from
+      # package.json — so a stale one drifts silently. It did, across two
+      # releases. Shared with ci.yml so both paths run the same gate.
+      - name: Lockfile must match the package version
+        run: node scripts/check-versions.mjs
 
       - run: npm ci
       - run: npm run build

@@ -48,7 +48,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "clean": "rm -rf dist",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/*.test.ts",
-    "prepublishOnly": "npm run clean && npm run build && npm test && npm run typecheck && node scripts/check-tarball.mjs"
+    "prepublishOnly": "node scripts/check-versions.mjs && npm run clean && npm run build && npm test && npm run typecheck && node scripts/check-tarball.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

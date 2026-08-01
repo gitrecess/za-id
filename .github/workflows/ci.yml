@@ -24,6 +24,13 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
+      # Two JSON reads, no install and no build, so it runs first and fails in
+      # a second. Nothing else notices a stale lockfile version: `npm ci`
+      # tolerates it and the tarball takes its version from package.json.
+      # Shared with publish.yml, same as the tarball check below.
+      - name: Lockfile must match the package version
+        run: node scripts/check-versions.mjs
+
       - run: npm ci
       - run: npm run build
       - run: npm test
