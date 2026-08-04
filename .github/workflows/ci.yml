@@ -12,8 +12,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 22.17.1 is the floor pinned in .nvmrc; 24 catches anything that
-        # depends on the current type-stripping behaviour staying experimental.
+        # 22.17.1 is the development Node pinned in .nvmrc; 24 catches anything
+        # that depends on the current type-stripping behaviour staying
+        # experimental. Deliberately not called "the floor" — since the
+        # engines-floor job below, that word means 20.19.0 in this file.
         node: ['22.17.1', '24']
 
     steps:
@@ -44,3 +46,60 @@ jobs:
       # publish.yml so the release path runs the same gate this one does.
       - name: Check tarball contents
         run: node scripts/check-tarball.mjs
+
+  # `engines.node` is metadata, and metadata nothing executes is a claim rather
+  # than a fact — it sat at `>=22.12.0` for three releases while the emitted
+  # code needed nothing of the sort. This job is the only thing anywhere that
+  # runs the built artefact on the exact version the package declares.
+  #
+  # A separate job rather than a third leg of the matrix above. `npm test` runs
+  # under `--experimental-strip-types`, which needs Node >= 22.6, so it cannot
+  # run at the floor at all; a matrix leg would have to carry an `if:` on the
+  # test step — a green leg proving strictly less than its siblings, and
+  # invisible as such in the checks list. That is the same shape as the publish
+  # path that once never ran the tarball check. A job with a name states what it
+  # claims; a skipped step inside a matrix does not.
+  engines-floor:
+    runs-on: ubuntu-latest
+
+    # East of UTC on purpose, and load-bearing rather than incidental. `dist/`
+    # builds its ISO date by hand precisely because `toISOString()` on a
+    # local-midnight Date serialises to the previous day here — under UTC the
+    # decode assertion in the script would pass either way.
+    env:
+      TZ: Africa/Johannesburg
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Read the floor, never restate it: two copies of a version number is how
+      # the lockfile drifted two releases behind. `node` is preinstalled on the
+      # runner, so this works before `setup-node`.
+      #
+      # The exact version, not `20.x` — a range resolves to the newest release
+      # in the line, which is not the version being claimed. The script's first
+      # assertion pins `process.versions.node` to this and fails loudly if the
+      # runner ever hands the job something else.
+      - name: Read the Node floor out of package.json
+        id: floor
+        run: |
+          floor=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).engines.node.replace(/^>=/,'')")
+          echo "Floor declared by engines.node: $floor"
+          echo "version=$floor" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ steps.floor.outputs.version }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # No `npm test` and no `npm run typecheck` here, deliberately. The suite
+      # needs type stripping and cannot run on this runtime at all — that is the
+      # whole reason this is a job rather than a matrix leg. The typecheck is a
+      # contributor-toolchain concern governed by `.nvmrc`, not a claim about a
+      # consumer's runtime; it does pass at the floor, which is not the same as
+      # being in scope.
+      - name: Artefact must load and run on the declared floor
+        run: node scripts/check-engines-floor.mjs

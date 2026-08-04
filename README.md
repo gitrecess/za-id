@@ -12,7 +12,8 @@ Validate and decode South African ID numbers.
 - **Deterministic.** The two-digit year needs a reference date to resolve;
   that date is an argument, not a hidden read of the system clock.
 - Works in Node, Deno, Bun, Cloudflare Workers and the browser. Published as
-  ESM; CommonJS callers on Node ≥ 22.12 can `require()` it directly.
+  ESM only; Node ≥ 20.19 is the floor, and CommonJS callers on that same floor
+  can `require()` it directly.
 
 ```bash
 npm install @iamlukia/za-id

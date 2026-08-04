@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Check that `package-lock.json` agrees with `package.json` about the version.
+ * Check that `package-lock.json` agrees with `package.json` about the version
+ * and the Node floor.
  *
  *   node scripts/check-versions.mjs
  *
@@ -28,11 +29,19 @@
  * sits third, after the two tag checks, which are cheaper still and reject the
  * more common mistake.
  *
- * Only the version is compared. `packages[""]` mirrors `name`, `license`,
- * `engines` and `devDependencies` too, but those drift differently: `npm ci`
- * fails outright on a `devDependencies` mismatch, and the rest change roughly
- * never and are not what a release touches. The version is the one field a
- * release moves every time and nothing else checks.
+ * `engines.node` is compared for a different reason, and was not compared at
+ * all until 2026-08-04. The old argument for leaving it out — that it "changes
+ * roughly never and is not what a release touches" — was true when the floor
+ * was inert metadata, and `ZA-ID-ENGINES-FLOOR-1` invalidated it: `ci.yml` now
+ * reads `engines.node` out of `package.json` and pins an entire job to that
+ * exact version. A lockfile copy left behind would advertise a floor nothing
+ * proves, which is a derived fact rotting beside its source — the same defect
+ * this script already exists to catch for the version, on a field that is now
+ * load-bearing rather than decorative.
+ *
+ * `name`, `license` and `devDependencies` are still not compared. `npm ci`
+ * fails outright on a `devDependencies` mismatch, and the other two genuinely
+ * do change roughly never and nothing reads them.
  *
  * `scripts/` is not in `files`, so this never ships; `check-tarball.mjs` is
  * what proves that.
@@ -61,18 +70,33 @@ if (typeof pkg.version !== 'string') {
   process.exit(1);
 }
 
+// The same guard, for the same reason and not by copy-paste habit: a
+// `package.json` with no `engines` would compare `undefined` against
+// `undefined`, agree, and print a floor that does not exist — while `ci.yml`
+// reads that same field to decide which Node to install. Absent, both would be
+// wrong in the same direction and neither would say so.
+if (typeof pkg.engines?.node !== 'string') {
+  console.error('package.json has no engines.node to compare against.');
+  process.exit(1);
+}
+
 const mismatches = [
-  ['package-lock.json .version', lock.version],
-  ['package-lock.json .packages[""].version', lock.packages?.['']?.version],
-].filter(([, found]) => found !== pkg.version);
+  ['package-lock.json .version', lock.version, pkg.version],
+  ['package-lock.json .packages[""].version', lock.packages?.['']?.version, pkg.version],
+  [
+    'package-lock.json .packages[""].engines.node',
+    lock.packages?.['']?.engines?.node,
+    pkg.engines.node,
+  ],
+].filter(([, found, expected]) => found !== expected);
 
 if (mismatches.length) {
-  console.error(`package.json says ${pkg.version}, but:`);
-  for (const [where, found] of mismatches) {
-    console.error(`  ${where} says ${found ?? '(missing)'}`);
+  console.error('package-lock.json disagrees with package.json:');
+  for (const [where, found, expected] of mismatches) {
+    console.error(`  ${where} says ${found ?? '(missing)'}, expected ${expected}`);
   }
   console.error('Run `npm install --package-lock-only` to bring them back in step.');
   process.exit(1);
 }
 
-console.log('Versions agree:', pkg.version);
+console.log(`Lockfile agrees: version ${pkg.version}, engines.node ${pkg.engines.node}`);
