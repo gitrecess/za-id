@@ -1,0 +1,505 @@
+#!/bin/sh
+# Five index-scoped guards for every repo in this workspace, wherever it is
+# cloned: staged paths .gitignore was supposed to be keeping out, secrets in
+# staged content, staged gitlinks, NUL bytes in staged markdown, and — where a
+# tasklist generator is present at the toplevel — that generator over the tree.
+#
+# NOTHING HERE IS REPO-SPECIFIC, which is what makes the copies below safe.
+# Guard 4 is conditional on scripts/generate_consolidated_tasklists.py existing,
+# so it is inert in a project repo rather than PMO-special; the other four ask
+# only about the index. Verified before the copies were made, not assumed.
+#
+# They all ask the same question, WHAT IS ACTUALLY GOING INTO THIS COMMIT, which
+# is the question neither `gitleaks dir` nor `.gitignore` can answer.
+#
+# That question is answered correctly even under `git commit -F - -- <paths>`,
+# the form this floor requires. Measured during batch 104: git builds a
+# TEMPORARY index for a pathspec commit and points GIT_INDEX_FILE at it, so
+# `git diff --cached`, `git ls-files --stage` and `git write-tree` all describe
+# the pathspec tree — not the shared index, and not a peer's concurrently staged
+# work. Without that property every guard here would be inspecting the wrong
+# bytes; it is worth knowing rather than re-deriving.
+#
+# THIS FILE IS TRACKED, AND SINCE BATCH 132 IT IS NOT THE ONLY COPY. Every
+# project repo under ~/dev carries a BYTE-IDENTICAL scripts/hooks/pre-commit, so
+# that hop 4 below resolves wherever the repo is cloned rather than only inside
+# ~/dev (PMO-SHARED-HOOK-SILENT-WHEN-DEV-PMO-ABSENT-1). Moved here 2026-08-02 by
+# PMO-CLOUD-AUDIT-PR-EXCEPTION-1 (b); generalised from PMO-only to every ~/dev
+# repo 2026-08-09 by PMO-PROJECT-REPOS-NO-COMMIT-SECRET-GATE-1 (batch 104).
+#
+# WHICH DUPLICATION IS FORBIDDEN, AND WHY THE OTHER IS NOT. A copy in .git/hooks/
+# is still banned outright: it is untracked, so nothing can see it drift and
+# nothing can restore it. A copy in a project repo is TRACKED AND CHECKED --
+# scripts/check-repo-registration.py asserts byte-identity against this file for
+# every repo on disk, and a copy that drifts is named on the next run. That is
+# this workspace's standing answer to deliberate duplication, and the reason the
+# earlier flat ban had to be narrowed rather than deleted: the copies are what
+# make the guards survive a clone, and the checker is what stops them forking.
+#
+# EDIT THIS FILE, THEN RE-SYNC. A change here is not delivered until every copy
+# matches it; the checker is what tells you, and it is run by /t-commit Step 1p
+# and /t-scaffold Step 8.
+#
+# How it is reached, in four hops:
+#   1. core.hooksPath = ~/.git-hooks replaces .git/hooks wholesale, so
+#      ~/.git-hooks/pre-commit runs first — the identity guard.
+#   2. It execs $(git rev-parse --absolute-git-dir)/hooks/pre-commit, which is
+#      the ONLY reason a repo-local hook runs at all on this machine.
+#   3. That file is the shim from ~/.git-template/hooks/pre-commit, placed in
+#      every repo by `init.templateDir` on clone and init.
+#   4. The shim execs a repo-local scripts/hooks/pre-commit if one exists, and
+#      otherwise THIS file — but only when the repo is under ~/dev.
+#
+# SO INSIDE ~/dev A PROJECT REPO NOW RUNS ITS OWN COPY, NOT THIS FILE. Same
+# bytes, same behaviour — but if you are debugging a guard in a project repo,
+# that is the file executing. Only the PMO repo still reaches this one by the
+# fallback.
+#
+# HOP 4's SCOPING IS LOAD-BEARING, NOT TIDINESS, and it is untouched by batch
+# 132. Guard 3 blocks staged gitlinks, and submodules are legitimate in the
+# SummitFin and TJ work repos on this machine. An unscoped fallback would block
+# their commits, and a guard that blocks legitimate work gets disabled wholesale
+# rather than narrowed. Note the copies do not weaken this: a work repo has no
+# scripts/hooks/pre-commit, so branch 1 does not fire there either.
+#
+# WHAT A FRESH CLONE STILL LOSES IS THE WIRING, and that is now the whole of it.
+# The shim lives in .git/ and cannot be tracked, and `init.templateDir` places it
+# only on clone or init on a machine that has that config set — so a checkout
+# elsewhere (a CI runner, a fresh laptop, the monthly cloud-audit routine) has
+# these guards sitting in the tree with nothing executing them, silently. That is
+# strictly better than batch 104's state, where the guards were absent rather
+# than merely unwired, and it is strictly not closed:
+# PMO-HOOK-SHIM-STILL-UNTRACKED-AFTER-BODY-SHIPS-1. Reinstating is one line:
+#
+#     #!/bin/sh
+#     exec "$(git rev-parse --show-toplevel)/scripts/hooks/pre-commit" "$@"
+#
+# DO NOT "FIX" THAT BY MAKING THE SHIM LOUD. A work repo hits the same silent
+# exit 0 legitimately, and a warning there is noise that trains --no-verify into
+# muscle memory. /t-commit Step 1p checks the wiring only in the repo it is
+# invoked in; the registration checker is what reports it across all of them.
+set -e
+
+# ---------------------------------------------------------------- guard 1 ----
+# Staged paths that match an ignore rule.
+#
+# `.ignore/` holds real credentials in plaintext and is held out of this repo by
+# one `/.ignore/` line in .gitignore. `git add -f` walks straight through that,
+# and the secrets gate does NOT catch it: `.ignore/npm.md` is pinned by
+# fingerprint in .gitleaksignore, and a fingerprint is path-, rule- and
+# line-specific — it cannot tell "resident where it belongs" from "staged for
+# commit". Measured, not argued: with the credential force-added and staged,
+# `gitleaks dir .` exits 0 and `gitleaks protect --staged` exits 0 as well.
+#
+# So this check is the load-bearing one, and it is path-based precisely so that
+# no allowlist can suppress it.
+#
+# `--no-index` is REQUIRED, not tidiness. Without it `git check-ignore` skips
+# any path already in the index — which is every force-added file, i.e. exactly
+# the case this exists for. Dropping it makes the guard silently pass.
+#
+# It is also general where the old check was not: `/t-commit` used to grep the
+# staged list for five hardcoded repo prefixes, which knew nothing about a new
+# gitignored path holding a credential. This asks git.
+#
+# `-z` on both sides, so a path with a space or a quote cannot split a field.
+# It emits four NUL-terminated records per hit — source, linenum, pattern,
+# pathname — which `tr` turns into four lines and awk regroups in fours.
+#
+# NUL is NOT used as awk's RS: macOS awk (BWK 20200816) silently takes RS="\0"
+# as the empty string and prints nothing at all, which turns this guard into a
+# no-op that looks like a pass. That was observed here, not guessed at.
+#
+# The residual case is a path containing a literal newline, which would desync
+# the grouping — but it still produces output, so the commit is still blocked
+# and the message is merely garbled. Failing loud is the right side to land on.
+#
+# `--diff-filter=d` (lowercase, meaning "not deleted") is what lets you undo the
+# mistake. `git rm --cached <path>` — the remedy this hook prints — stages a
+# DELETION of that path, which without the filter this guard counts as a hit and
+# blocks, so the only way out of a blocked commit would be --no-verify. Observed
+# on the first run of this hook, which is why it is here.
+# THE PIPELINE IS DECOMPOSED BECAUSE IT CANNOT BE MADE TO FAIL LOUDLY AS ONE.
+# `set -e` does not fire on a non-final pipeline element and /bin/sh has no
+# `pipefail`, so `check-ignore` exiting 128 produced EMPTY STDOUT that is
+# indistinguishable from "nothing ignored is staged" — the guard fell open, in
+# silence, in the check this file calls the load-bearing one
+# (PMO-PRECOMMIT-GUARD1-FAILS-OPEN-ON-ERROR-1, batch 104).
+#
+# Measured with a plaintext credential in the index, all three guards passed:
+# guard 1 silent (this bug), guard 2 green (pins apply — the comment under
+# guard 2 says so), guard 3 n/a.
+#
+# THE ROW'S NAMED TRIGGER DOES NOT ACTUALLY REACH HERE, and the correction is
+# worth more than the example. `core.excludesFile` pointing at a directory was
+# cited as the reachable cause of 128; measured, `git commit` reads that config
+# itself and dies with `fatal: cannot use ... as an exclude file` BEFORE any
+# hook runs. So that particular misconfiguration is loud already.
+#
+# What remains is a genuine backstop with no enumerated trigger: any future
+# failure of check-ignore — a corrupt ignore file, an I/O error, a git upgrade
+# changing its behaviour — must not read as "nothing ignored is staged". The
+# branch below is exercised in test by a `git` shim returning 128, because
+# nothing reachable in ordinary operation exercises it, and an unexercised
+# guard branch is this workspace's recorded "test that cannot fail" class.
+#
+# check-ignore's exit codes: 0 = something matched, 1 = nothing matched,
+# 128 = error. ONLY 0 AND 1 ARE ANSWERS.
+#
+# EVERYTHING GOES THROUGH TEMP FILES RATHER THAN SHELL VARIABLES, AND THAT IS
+# NOT STYLE — IT IS THE SECOND FAIL-OPEN THIS GUARD PRODUCED. Both sides of
+# this check are NUL-separated (`-z`), and command substitution CANNOT CARRY A
+# NUL BYTE: `staged=$(git diff --cached -z ...)` silently concatenates every
+# staged path into one string with no separators, check-ignore is handed a
+# single garbage path, matches nothing, and the guard goes quiet over a
+# credential sitting in the index. Measured during batch 104, on the first
+# attempt at this very fix — the naive decomposition of the old pipeline
+# reintroduced the exact class it was written to remove, one layer down.
+#
+# The ORIGINAL pipeline was safe on this axis precisely because it never used a
+# variable: NULs flow through pipes intact. What it could not do was observe the
+# middle command's exit status, which is the bug being fixed. Temp files buy
+# both properties at once.
+gitdir=$(git rev-parse --absolute-git-dir) || exit 1
+staged_f="$gitdir/.pre-commit-staged.$$"
+found_f="$gitdir/.pre-commit-ignored.$$"
+err_f="$gitdir/.pre-commit-err.$$"
+# Single-file removals only — never a recursive force-remove, per the standing
+# rule. The trap covers every exit path including the `exit 1`s below.
+trap 'rm -f "$staged_f" "$found_f" "$err_f"' EXIT
+
+if ! git diff --cached --name-only -z --diff-filter=d > "$staged_f"; then
+	echo "" >&2
+	echo "  ✗ pre-commit blocked — 'git diff --cached' failed." >&2
+	echo "    The staged file list could not be read, so guard 1 cannot run." >&2
+	echo "    An unreadable index is not an empty one." >&2
+	echo "" >&2
+	exit 1
+fi
+
+# `if`, NOT `cmd; rc=$?`. Under `set -e` a bare assignment or bare command
+# carries its own exit status, so the shell would die whenever check-ignore
+# returns 1 — the ORDINARY case, "nothing ignored is staged". Written the
+# obvious way this guard turns a silent fail-OPEN into a silent fail-CLOSED
+# that blocks every commit in the repo. Also measured during batch 104, by the
+# deliberately-included "a clean commit must still pass" case; without that
+# case in the harness the regression ships looking like a fix.
+if git check-ignore --stdin -z -v --no-index \
+		< "$staged_f" > "$found_f" 2> "$err_f"; then
+	check_rc=0
+else
+	check_rc=$?
+fi
+
+if [ "$check_rc" -ne 0 ] && [ "$check_rc" -ne 1 ]; then
+	echo "" >&2
+	echo "  ✗ pre-commit blocked — 'git check-ignore' exited $check_rc." >&2
+	echo "" >&2
+	sed 's/^/      /' < "$err_f" >&2
+	echo "" >&2
+	echo "  This guard is the only thing standing between a force-added" >&2
+	echo "  credential and history, and it cannot answer right now. An error" >&2
+	echo "  is NOT 'nothing ignored is staged' — that conflation is the bug" >&2
+	echo "  this block exists to prevent." >&2
+	echo "" >&2
+	echo "  Start with the ignore configuration this repo resolves:" >&2
+	echo "      git config --show-origin --get core.excludesFile" >&2
+	echo "      git check-ignore -v --no-index -- <a staged path>" >&2
+	echo "" >&2
+	echo "  Override once: git commit --no-verify" >&2
+	echo "" >&2
+	exit 1
+fi
+
+# Safe to hold in a variable from here: `tr` has removed every NUL first.
+ignored=$(tr '\0' '\n' < "$found_f" \
+	| awk '{ f[NR % 4] = $0 }
+	       NR % 4 == 0 { print f[0] "   (" f[1] ":" f[2] " -> " f[3] ")" }')
+
+if [ -n "$ignored" ]; then
+	echo "" >&2
+	echo "  ✗ pre-commit blocked — gitignored path(s) staged:" >&2
+	echo "$ignored" | sed 's/^/      /' >&2
+	echo "" >&2
+	echo "  A path git was told to ignore is in the index. In this repo that is" >&2
+	echo "  usually a credential: the secrets gate is green on these by design," >&2
+	echo "  so this hook is the only thing standing between it and history." >&2
+	echo "" >&2
+	echo "      git rm --cached <path>" >&2
+	echo "" >&2
+	echo "  Never resolve this by editing or deleting anything under .ignore/." >&2
+	echo "  Override once: git commit --no-verify" >&2
+	echo "" >&2
+	exit 1
+fi
+
+# ---------------------------------------------------------------- guard 2 ----
+# Content of what is staged.
+#
+# Narrower than it looks, and deliberately kept anyway. It CANNOT see a pinned
+# path — .gitleaksignore is discovered from the scan target, so the pins apply
+# here too and guard 1 above is what covers `.ignore/`. What it does cover is
+# the one case nothing else does: a credential staged into a tracked file and
+# then reverted in the worktree, which the full-tree sweep reads as clean.
+#
+# Since 2026-08-04 the same discovery rule also loads ~/dev/.gitleaks.toml here,
+# because the scan target is this repo. So this guard is BLIND to the eight
+# artefact directory names in that config's allowlist, and so is the full-tree
+# sweep. What makes that safe is not "nothing lands there" — it is that the same
+# eight names are in .gitignore, so guard 1 above blocks any of them reaching a
+# commit. The two files are a deliberate pair; read .gitignore's comment on them.
+#
+# THAT PAIRING WAS MISSING FOR THE FIRST HOUR THE CONFIG EXISTED, and the gap is
+# why this comment is long. The allowlist is unanchored, so it covered `out/` and
+# `docs/build/` INSIDE the PMO tree, which .gitignore did not then list — and a
+# credential at ~/dev/out/notes.md was measured passing all three checks at once:
+# invisible to the sweep and to this guard (allowlisted), and silent to guard 1
+# (not an ignored path, so nothing to block). Neither half is wrong alone; the
+# hole was the two being introduced separately.
+#
+# GUARD 1 IS UNAFFECTED BY ANY OF THIS: it is path-based and asks git, not
+# gitleaks, so no allowlist in any config can reach it. That is why it is the
+# load-bearing one, why it runs first, and why the fix above was to widen
+# .gitignore rather than to narrow the allowlist.
+#
+# Unavailable means stop, never a silent pass — a secret scan that cannot run
+# and says nothing is worse than no scan, because the exit code still reads as
+# a pass.
+if ! command -v gitleaks >/dev/null 2>&1; then
+	echo "" >&2
+	echo "  ✗ pre-commit blocked — gitleaks not on PATH." >&2
+	echo "    The staged-content scan cannot run, so this commit is unscanned." >&2
+	echo "    Install it, or override once: git commit --no-verify" >&2
+	echo "" >&2
+	exit 1
+fi
+
+if ! gitleaks protect --staged --redact --exit-code=1 --no-banner >/dev/null 2>&1; then
+	echo "" >&2
+	echo "  ✗ pre-commit blocked — gitleaks found a secret in staged content." >&2
+	echo "    Re-run to see it:" >&2
+	echo "" >&2
+	echo "      gitleaks protect --staged --redact -v --exit-code=1" >&2
+	echo "" >&2
+	echo "  Override once: git commit --no-verify" >&2
+	echo "" >&2
+	exit 1
+fi
+
+# ---------------------------------------------------------------- guard 3 ----
+# Staged gitlinks (mode 160000).
+#
+# The originating case is the PMO repo, which tracks the workspace layer around
+# the project repos and excludes each by name in .gitignore: one cloned into
+# ~/dev and missed by that list is staged as a submodule reference pointing at a
+# commit no clone can fetch. .gitignore cannot prevent that; this can.
+#
+# Kept for every repo under ~/dev rather than special-cased to the PMO repo,
+# because an unintended gitlink is wrong everywhere — but it is ALSO the reason
+# the shim that reaches this file is scoped to ~/dev. Submodules are legitimate
+# in the SummitFin and TJ work repos on this machine, and a guard that blocked
+# them there would be turned off wholesale rather than narrowed.
+#
+# `git ls-files --stage` rather than `git diff --cached --raw`, because the
+# latter needs a HEAD to diff against and the very first commit has none.
+gitlinks=$(git ls-files --stage | awk '$1 == "160000"' | cut -f2-)
+
+if [ -n "$gitlinks" ]; then
+	echo "" >&2
+	echo "  ✗ pre-commit blocked — staged gitlink(s):" >&2
+	echo "$gitlinks" | sed 's/^/      /' >&2
+	echo "" >&2
+	echo "  A nested git repo is being committed as a submodule reference." >&2
+	echo "  Add it to .gitignore, then untrack it:" >&2
+	echo "" >&2
+	echo "      git rm --cached <dir>" >&2
+	echo "" >&2
+	echo "  Override once: git commit --no-verify" >&2
+	echo "" >&2
+	exit 1
+fi
+
+# ---------------------------------------------------------------- guard 4 ----
+# The tasklist generator, over the tree being committed.
+#
+# `generate_consolidated_tasklists.py` is the gate over three rules no other
+# commit-triggered check enforces: the `- Status:` ban on asserting commit
+# state, the eight-figure `## Status` vs `## Open Tasks` agreement in every
+# active queue, and the README queue-row rule. It was absent from this hook
+# entirely — verified by grep, the file ran no Python at all — so the gate
+# reached a commit ONLY via /t-commit Step 4v, which is opt-in. Every
+# `git commit -F - -- <paths>` the stage system prescribes bypassed it, and that
+# is the form every commit on this floor is REQUIRED to use
+# (PMO-GENERATOR-NOT-IN-PRECOMMIT-HOOK-1, batch 104).
+#
+# WHY A SHADOW TREE RATHER THAN AN IN-PLACE RUN: the script WRITES the two
+# rollups on a green run. Invoked against the worktree from a hook it would
+# rewrite tracked files mid-commit — files outside the pathspec, so not in the
+# commit — leaving the tree dirty and the rollups disagreeing with what was just
+# committed. It resolves its root from its own location, so invoked by its
+# SHADOW path it reads the committed docs/ and writes the rollups into the
+# throwaway tree, which is the point.
+#
+# `git write-tree` rather than Step 4v's `HEAD^{tree}`, and that difference is
+# why this can exist at all. Step 4v runs AFTER the commit, so HEAD is the
+# artefact; a pre-commit hook runs before it. Measured during batch 104: git
+# sets GIT_INDEX_FILE to a temporary index holding exactly the tree being
+# committed — including under `git commit -- <paths>`, where the real index is
+# NOT what gets committed — so write-tree here yields the true artefact, with a
+# peer's concurrently staged work absent from it.
+#
+# GUARDED ON PATH, so this does not fire for every commit. Once the shared body
+# reaches the project repos (104.3), an unguarded run would make every Astro and
+# Gradle commit pay for a Python run over a docs tree they do not have.
+if [ -f "$(git rev-parse --show-toplevel)/scripts/generate_consolidated_tasklists.py" ] &&
+		tr '\0' '\n' < "$staged_f" | /usr/bin/grep -q '^docs/tasklist/'; then
+	tree=$(git write-tree) || {
+		echo "" >&2
+		echo "  ✗ pre-commit blocked — 'git write-tree' failed." >&2
+		echo "    The tree being committed could not be materialised, so the" >&2
+		echo "    tasklist gate cannot run over it. That is not a pass." >&2
+		echo "" >&2
+		exit 1
+	}
+	# KEYED ON THE TREE SHA, AND IN OS-MANAGED TEMP RATHER THAN UNDER .git/.
+	#
+	# Step 4v's hazard is that `git archive | tar -x` overwrites files and
+	# removes nothing, so a reused directory keeps the previous run's output and
+	# turns a mandatory check into one that cannot fail. Keying on the tree SHA
+	# dissolves that rather than mitigating it: a git tree SHA determines its
+	# content exactly, so a directory that already holds this tree holds
+	# byte-identical bytes. Reuse is provably safe here in a way it is not for
+	# Step 4v, whose directories accumulate BUILD output the archive never
+	# replaces.
+	#
+	# Not under $gitdir, because these are ~7.6M each and nothing would ever
+	# remove them: Step 4v needs no cleanup only because the session scratchpad
+	# is collected for it, and .git/ has no such property. This hook must not
+	# prescribe a recursive force-remove — the standing rule, and the harness
+	# denies the command outright — so the answer is to need no removal at all
+	# and let the OS reclaim its own temp directory.
+	#
+	# Extract to a per-process name and rename, so a peer committing the SAME
+	# tree concurrently cannot read a half-extracted directory. `mv` onto an
+	# existing directory loses the race harmlessly: both copies are identical.
+	shadow="${TMPDIR:-/tmp}/dev-pmo-precommit-$tree"
+	if [ ! -d "$shadow" ]; then
+		staging="$shadow.$$"
+		mkdir -p "$staging"
+		git archive "$tree" | tar -x -C "$staging"
+		mv "$staging" "$shadow" 2>/dev/null || true
+		[ -d "$shadow" ] || shadow="$staging"
+	fi
+	if ! gen_out=$(python3 "$shadow/scripts/generate_consolidated_tasklists.py" 2>&1); then
+		echo "" >&2
+		echo "  ✗ pre-commit blocked — the tasklist gate failed on the tree" >&2
+		echo "    being committed:" >&2
+		echo "" >&2
+		printf '%s\n' "$gen_out" | sed 's/^/      /' >&2
+		echo "" >&2
+		echo "  This ran over the COMMIT, not the worktree, so fixing the files" >&2
+		echo "  on disk is not enough — re-stage them. Re-derive the figures" >&2
+		echo "  from the table rather than hand-editing ## Status to match." >&2
+		echo "" >&2
+		echo "  Override once: git commit --no-verify" >&2
+		echo "" >&2
+		exit 1
+	fi
+fi
+
+# ---------------------------------------------------------------- guard 5 ----
+# NUL bytes in staged markdown.
+#
+# PMO-STAGE-NUL-BYTE-HIDES-DOC-FROM-GREP-1 and
+# PMO-CONTRAST-SCRIPT-NUL-BYTES-DEFEAT-GREP-1 are the same defect in two
+# directories. One NUL byte in docs/tasklist/stage/batch-100.md removed that
+# batch from `grep -H '^- Stage:' docs/tasklist/stage/batch-*.md` — four docs
+# returned, EXIT 0, with a batch holding `Repos: dev-pmo` simply absent. Three
+# NULs in scripts/check-contrast.mjs made grep report no match over the whole
+# file. Neither failed; both answered.
+#
+# IT IS AN AGENT-ONLY BLIND SPOT, WHICH IS WHY IT NEEDS A HOOK. `command grep`
+# (ugrep 7.5.0), /usr/bin/grep (BSD 2.6.0) and `grep -a` all match. Only the
+# Claude Code shell wrapper fails, because it injects -I. So a human at a
+# terminal cannot reproduce it, and the failure is invisible to whoever a
+# session reports it to while landing squarely on the session polling the floor.
+#
+# TWO TRAPS, BOTH LOAD-BEARING, BOTH MEASURED IN A THROWAWAY REPO BEFORE THIS
+# WAS WRITTEN:
+#
+#   1. NEVER THE BARE WORD `grep` HERE. It inherits the very -I that hides what
+#      this guard checks for, and would pass vacuously over exactly the file it
+#      exists to catch. Measured: on a staged .md carrying one NUL, bare
+#      `grep -c ""` exits 1 with no output where /usr/bin/grep returns 2.
+#
+#   2. NEVER ROUTE THE BYTES THROUGH A SHELL VARIABLE. Command substitution
+#      discards NULs — that is how guard 1 once went quiet over a credential in
+#      the index, decomposing an unbroken `-z` pipeline through a variable and
+#      concatenating every staged path into one garbage string. Here only a
+#      COUNT crosses the variable; the bytes stay in the pipe.
+#
+# `git show :$path` reads the staged blob, so this asks the same question as
+# guards 1-3 — what is actually going into this commit — and is correct under
+# `git commit -F - -- <paths>`, which builds a temporary index.
+#
+# Scoped to .md rather than to docs/: CLAUDE.md and README.md are the
+# highest-value prose in this workspace and sit outside it, and a NUL in tracked
+# markdown is wrong wherever it lands. Non-markdown is deliberately NOT covered
+# — binary files are legitimate, and check-contrast.mjs's own NULs were fixed at
+# source rather than by widening this.
+# THE FIRST DRAFT OF THIS GUARD FAILED OPEN AND WAS CAUGHT BY TESTING IT, WHICH
+# is worth recording because it is this guard's own subject. It read
+# `for path in $(git diff --cached --name-only | grep '\.md$')`, and the
+# unquoted command substitution WORD-SPLITS ON SPACES: a staged `my notes.md`
+# carrying a NUL became the two tokens `my` and `notes.md`, `git show` failed on
+# both, and the guard exited 0. Measured — an answer of "clean" over a file it
+# never read, which is precisely the defect class the row is about arriving
+# inside the fix for it.
+#
+# So: `-z` and `tr` rather than a bare substitution, `-- '*.md'` as a git
+# pathspec rather than a grep on the name, and an UNREADABLE staged blob BLOCKS
+# rather than being skipped. A path holding a literal newline still desyncs the
+# split — but it now produces a path git cannot show, so the commit is blocked
+# and the message is merely garbled. Failing loud is the right side to land on;
+# guard 1 takes the same stance for the same reason.
+md_f="$gitdir/.pre-commit-md.$$"
+blob_f="$gitdir/.pre-commit-blob.$$"
+# RE-DECLARING THE TRAP REPLACES GUARD 1's — `trap ... EXIT` does not stack — so
+# this one names all five temp files, guard 1's three included. Setting a second
+# trap for these two alone would silently leak guard 1's into .git/ on every
+# commit, which is a thing nobody would ever notice.
+trap 'rm -f "$staged_f" "$found_f" "$err_f" "$md_f" "$blob_f"' EXIT
+nul_files=''
+git diff --cached --name-only -z --diff-filter=ACM -- '*.md' | tr '\0' '\n' > "$md_f"
+while IFS= read -r path; do
+	[ -n "$path" ] || continue
+	if ! git show ":$path" > "$blob_f" 2>/dev/null; then
+		nul_files="$nul_files      $path (staged blob UNREADABLE — cannot verify)
+"
+		continue
+	fi
+	raw=$(wc -c < "$blob_f" | tr -d ' ')
+	stripped=$(tr -d '\000' < "$blob_f" | wc -c | tr -d ' ')
+	if [ "$raw" -ne "$stripped" ]; then
+		nul_files="$nul_files      $path ($((raw - stripped)) NUL byte(s))
+"
+	fi
+done < "$md_f"
+
+if [ -n "$nul_files" ]; then
+	echo "" >&2
+	echo "  ✗ pre-commit blocked — NUL byte(s) in staged markdown:" >&2
+	printf '%s' "$nul_files" >&2
+	echo "" >&2
+	echo "  A NUL makes this file BINARY to grep, which then reports no match" >&2
+	echo "  over it — silently, at exit 0. An agent sweeping the floor will not" >&2
+	echo "  see this file at all, and you will not be able to reproduce that at" >&2
+	echo "  a terminal: only the agent shell injects -I." >&2
+	echo "" >&2
+	echo "  Find them:  /usr/bin/grep -c '' <file>   (vs. a bare grep)" >&2
+	echo "  In prose, write \\\\0 or 'NUL' rather than typing the byte." >&2
+	echo "" >&2
+	echo "  Override once: git commit --no-verify" >&2
+	echo "" >&2
+	exit 1
+fi
