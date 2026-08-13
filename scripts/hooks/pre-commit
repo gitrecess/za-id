@@ -146,6 +146,35 @@ set -e
 # check-ignore's exit codes: 0 = something matched, 1 = nothing matched,
 # 128 = error. ONLY 0 AND 1 ARE ANSWERS.
 #
+# AND A MATCH IS NOT AN IGNORE DECISION — THAT IS A SECOND CONFLATION IN THE
+# SAME COMMAND, and it is the one the awk below now filters. check-ignore exits
+# 0 whenever a pattern MATCHES, and a NEGATION (`!foo`) is a match: it is git's
+# way of saying "a rule decided this path, and the rule was a re-inclusion".
+# Reading every record as "a path git was told to ignore is in the index" is
+# therefore wrong for exactly the paths a .gitignore went out of its way to
+# KEEP. git itself disagrees with the old reading — `git status --ignored` calls
+# such a path an ordinary staged addition.
+#
+# Measured 2026-08-12 on a start.spring.io scaffold: the repo's first commit was
+# blocked on `gradle/wrapper/gradle-wrapper.jar (.gitignore:4 ->
+# !gradle/wrapper/gradle-wrapper.jar)`. THE DANGEROUS HALF WAS THE REMEDY, NOT
+# THE BLOCK — the message below prints `git rm --cached`, which untracks a file
+# the repo is supposed to carry and reads as compliance with a guard rather than
+# as damage. A wrong block costs a minute; the suggested fix costs the file.
+#
+# dev-pmo carries no negation, which is why a defect this old was never hit
+# here: the repo taking 20-224 commits a day is the one that cannot reproduce
+# it. The trigger is not a repo but a PATH whose ignore decision was made by a
+# negation — `.env.example` and a wrapper jar being the two that a scaffold
+# commits once, which is where this was found (/t-scaffold's dry run, Step 6).
+#
+# The filter is `f[3] !~ /^!/`, field 3 being the PATTERN in check-ignore -v's
+# four-record output. Verified in BOTH directions before it was believed, since
+# a filter that also drops real violations reads as stricter and is worse than
+# the false positive it removes: a commit carrying a negation-decided path AND a
+# force-added `build/leak.txt` still blocks, naming `build/leak.txt
+# (.gitignore:3 -> build/)` and not the negation.
+#
 # EVERYTHING GOES THROUGH TEMP FILES RATHER THAN SHELL VARIABLES, AND THAT IS
 # NOT STYLE — IT IS THE SECOND FAIL-OPEN THIS GUARD PRODUCED. Both sides of
 # this check are NUL-separated (`-z`), and command substitution CANNOT CARRY A
@@ -214,7 +243,7 @@ fi
 # Safe to hold in a variable from here: `tr` has removed every NUL first.
 ignored=$(tr '\0' '\n' < "$found_f" \
 	| awk '{ f[NR % 4] = $0 }
-	       NR % 4 == 0 { print f[0] "   (" f[1] ":" f[2] " -> " f[3] ")" }')
+	       NR % 4 == 0 && f[3] !~ /^!/ { print f[0] "   (" f[1] ":" f[2] " -> " f[3] ")" }')
 
 if [ -n "$ignored" ]; then
 	echo "" >&2
