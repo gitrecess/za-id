@@ -138,10 +138,34 @@ set -e
 #
 # What remains is a genuine backstop with no enumerated trigger: any future
 # failure of check-ignore — a corrupt ignore file, an I/O error, a git upgrade
-# changing its behaviour — must not read as "nothing ignored is staged". The
-# branch below is exercised in test by a `git` shim returning 128, because
-# nothing reachable in ordinary operation exercises it, and an unexercised
-# guard branch is this workspace's recorded "test that cannot fail" class.
+# changing its behaviour — must not read as "nothing ignored is staged".
+#
+# THE BRANCH BELOW IS UNEXERCISED, AND SAYING SO IS THE HONEST CLAIM.
+# This comment asserted the opposite until 2026-08-16 -- that the branch "is
+# exercised in test by a `git` shim returning 128" -- and no such test existed
+# anywhere in the tree (PMO-PRECOMMIT-128-BRANCH-UNREACHABLE-BY-ITS-OWN-TEST-1,
+# batch 189, closed at batch 205's pick-up). The CLAIM OF COVERAGE was the
+# defect; the guard itself is correct and was never in question.
+#
+# A PATH SHIM CANNOT REACH A `git` CALL INSIDE A GIT HOOK, and the mechanism is
+# kept here because nobody will re-derive it: git PREPENDS ITS EXEC-PATH to PATH
+# before running a hook, and that directory holds a `git` symlink to the real
+# binary -- so a shim placed earlier on the caller's PATH is structurally
+# shadowed. Measured at batch 189 by doing it: the shim arm reported rc=0
+# against the UNPATCHED hook, a passing test in the one arm whose whole purpose
+# was proving a fail-closed branch still fails closed.
+#
+# TWO GENUINE ROUTES TO A check-ignore 128 WERE THEN MEASURED AND BOTH ARE
+# CAUGHT ONE GUARD EARLIER, by `git diff --cached`, because git refuses the diff
+# for the same reason check-ignore would fail: making `.git/info/exclude` a
+# directory, and pointing `core.excludesFile` at one. So the branch may be
+# unreachable by any construction available here.
+#
+# The guard is unaffected either way -- it fails closed on an unreadable index
+# and on a check-ignore error alike, verified in both directions at batch 189.
+# DO NOT DELETE THE BRANCH on the strength of "unreachable": it is the backstop
+# against a future git whose behaviour changes, which is precisely the case no
+# test today can construct.
 #
 # check-ignore's exit codes: 0 = something matched, 1 = nothing matched,
 # 128 = error. ONLY 0 AND 1 ARE ANSWERS.
