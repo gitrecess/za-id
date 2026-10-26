@@ -5,11 +5,12 @@ on:
     branches: [main]
     # Docs-only pushes skip CI (ZA-ID-CI-DOCS-ONLY-PUSHES-RUN-1; the other repos
     # since PMO-ACTIONS-MINUTES-SPEND-1). Safe to ignore *.md: no test or script
-    # reads a Markdown file's content, measured 2026-10-05. check-tarball.mjs only
+    # reads a Markdown file's content, measured 2026-10-05 and 2026-10-26. check-tarball.mjs only
     # lists README.md as an allowed file, and publish.yml gates the tag on its own.
+    # `**/*.md`, not `*.md`: the latter matches root files only (PMO-CI-SKIP-DOC-PUSHES-1).
     paths-ignore:
       - 'docs/**'
-      - '*.md'
+      - '**/*.md'
   pull_request:
 
 jobs:
