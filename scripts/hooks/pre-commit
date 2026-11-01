@@ -2,10 +2,10 @@
 # Five index-scoped guards for every repo in this workspace, wherever it is
 # cloned: staged paths .gitignore was supposed to be keeping out, secrets in
 # staged content, staged gitlinks, NUL bytes in staged markdown, and — where a
-# tasklist generator is present at the toplevel — that generator over the tree.
+# tasklist generator is staged at the toplevel — that generator over the tree.
 #
 # NOTHING HERE IS REPO-SPECIFIC, which is what makes the copies below safe.
-# Guard 4 is conditional on scripts/generate_consolidated_tasklists.py existing,
+# Guard 4 is conditional on scripts/generate_consolidated_tasklists.py being staged,
 # so it is inert in a project repo rather than PMO-special; the other four ask
 # only about the index. Verified before the copies were made, not assumed.
 #
@@ -404,8 +404,91 @@ fi
 # GUARDED ON PATH, so this does not fire for every commit. Once the shared body
 # reaches the project repos (104.3), an unguarded run would make every Astro and
 # Gradle commit pay for a Python run over a docs tree they do not have.
-if [ -f "$(git rev-parse --show-toplevel)/scripts/generate_consolidated_tasklists.py" ] &&
-		tr '\0' '\n' < "$staged_f" | /usr/bin/grep -q '^docs/tasklist/'; then
+#
+# THE TRIGGER IS EVERY DIRECTORY THE GATE JUDGES, NOT docs/tasklist/ ALONE
+# (PMO-PRECOMMIT-GUARD4-BLIND-TO-UNREGISTERED-DOC-COMMIT-1, batch 671). The
+# generator fails when a top-level .md in one of its REGISTERED_DIRS has no
+# _sources.toml row, and when a row names a file that is gone. A commit naming
+# only docs/specs/x.md staged nothing under docs/tasklist/, so this guard never
+# ran, the unregistered spec reached HEAD, and every session's regenerate failed
+# from then on: the batch 650 harm, arriving by the one door left open after
+# batch 661.2 made the worktree run only WARN on an untracked document.
+#
+# REGISTERED_DIRS IS READ FROM THE GENERATOR, NEVER COPIED HERE, so the two
+# lists cannot drift. It is read from the STAGED blob (`git show :path`), the
+# generator this commit will carry, not a peer's dirty worktree copy; and by
+# `ast`, so nothing in that file executes to answer. A list that cannot be read
+# BLOCKS: a trigger that cannot answer is not a trigger that said no.
+#
+# DELETIONS COUNT HERE, unlike guard 1's list (`--diff-filter=d`, kept for
+# guard 1's own reason), and A DELETION ANYWHERE UNDER docs/ triggers, not only
+# inside REGISTERED_DIRS: a row whose `file` is gone fails the generator's other
+# direction, and rows also name files outside those directories (audit/, for
+# one, which registers by row rather than by directory).
+#
+# `--no-renames` IS LOAD-BEARING. `git diff` detects renames by default and a
+# rename lists ONLY its new path, so `git mv docs/specs/x.md docs/audit/x.md`
+# showed neither a judged path nor a deletion and skipped the gate (batch 671's
+# review, measured on git 2.50.1). Without detection it is a D and an A.
+#
+# The generator's presence is asked of the INDEX, like everything else here: a
+# worktree test switched the guard off for a generator deleted on disk but still
+# staged, and blocked misleadingly on one present on disk but never staged.
+#
+# Python's exit codes are the protocol: 0 = a judged path is staged, 3 = none
+# is, anything else (1 for an exception or a sys.exit message) is an error.
+trig_f="$gitdir/.pre-commit-trigger.$$"
+gen_f="$gitdir/.pre-commit-generator.$$"
+# Replaces guard 1's trap, which does not stack; guard 5 names these two again.
+trap 'rm -f "$staged_f" "$found_f" "$err_f" "$trig_f" "$gen_f"' EXIT
+guard4_rc=3
+if git cat-file -e ":scripts/generate_consolidated_tasklists.py" 2>/dev/null; then
+	if git diff --cached --name-status -z --no-renames > "$trig_f" &&
+			git show ":scripts/generate_consolidated_tasklists.py" > "$gen_f"; then
+		if python3 - "$gen_f" "$trig_f" 2> "$err_f" <<'PY'; then
+import ast, sys
+gen_path, staged_path = sys.argv[1], sys.argv[2]
+dirs = None
+for node in ast.parse(open(gen_path, encoding="utf-8").read()).body:
+    targets = node.targets if isinstance(node, ast.Assign) else (
+        [node.target] if isinstance(node, ast.AnnAssign) else [])
+    if any(isinstance(t, ast.Name) and t.id == "REGISTERED_DIRS" for t in targets):
+        dirs = ast.literal_eval(node.value)
+if not dirs or not all(isinstance(d, str) and d for d in dirs):
+    sys.exit("REGISTERED_DIRS is missing from the staged generator, or is "
+             "not a literal tuple of directory names")
+prefixes = ("docs/tasklist/",) + tuple(f"docs/{d.strip('/')}/" for d in dirs)
+# --name-status -z without renames: STATUS NUL PATH NUL, one pair per path.
+fields = open(staged_path, "rb").read().decode("utf-8", "surrogateescape").split("\0")
+pairs = zip(fields[0::2], fields[1::2])
+sys.exit(0 if any(path.startswith(prefixes)
+                  or (status == "D" and path.startswith("docs/"))
+                  for status, path in pairs) else 3)
+PY
+			guard4_rc=0
+		else
+			guard4_rc=$?
+		fi
+	else
+		guard4_rc=2
+		echo "could not read the staged path list or the staged generator" > "$err_f"
+	fi
+	if [ "$guard4_rc" -ne 0 ] && [ "$guard4_rc" -ne 3 ]; then
+		echo "" >&2
+		echo "  ✗ pre-commit blocked — guard 4 could not decide whether to run." >&2
+		echo "" >&2
+		sed 's/^/      /' < "$err_f" >&2
+		echo "" >&2
+		echo "  Its trigger reads REGISTERED_DIRS from the staged" >&2
+		echo "  scripts/generate_consolidated_tasklists.py. An unreadable list" >&2
+		echo "  is not an empty one." >&2
+		echo "" >&2
+		echo "  Override once: git commit --no-verify" >&2
+		echo "" >&2
+		exit 1
+	fi
+fi
+if [ "$guard4_rc" -eq 0 ]; then
 	tree=$(git write-tree) || {
 		echo "" >&2
 		echo "  ✗ pre-commit blocked — 'git write-tree' failed." >&2
@@ -518,10 +601,10 @@ fi
 md_f="$gitdir/.pre-commit-md.$$"
 blob_f="$gitdir/.pre-commit-blob.$$"
 # RE-DECLARING THE TRAP REPLACES GUARD 1's — `trap ... EXIT` does not stack — so
-# this one names all five temp files, guard 1's three included. Setting a second
+# this one names all seven temp files, guards 1 and 4's included. Setting a second
 # trap for these two alone would silently leak guard 1's into .git/ on every
 # commit, which is a thing nobody would ever notice.
-trap 'rm -f "$staged_f" "$found_f" "$err_f" "$md_f" "$blob_f"' EXIT
+trap 'rm -f "$staged_f" "$found_f" "$err_f" "$trig_f" "$gen_f" "$md_f" "$blob_f"' EXIT
 nul_files=''
 git diff --cached --name-only -z --diff-filter=ACM -- '*.md' | tr '\0' '\n' > "$md_f"
 while IFS= read -r path; do
