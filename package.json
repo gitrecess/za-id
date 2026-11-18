@@ -47,7 +47,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "clean": "rm -rf dist",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-timeout=30000 test/*.test.ts",
     "prepublishOnly": "node scripts/check-versions.mjs && npm run clean && npm run build && npm test && npm run typecheck && node scripts/check-tarball.mjs"
   },
   "devDependencies": {
